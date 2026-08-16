@@ -1,6 +1,6 @@
 ---
 name: skills-index
-description: 工作区 skill 根索引，按场景路由到 download_website / reverse-enginer-skill / code-simplification / code-style 等子 skill。仅作导航，不包含子 skill 的具体能力描述。
+description: 工作区 skill 根索引，按场景路由到 download_website / reverse-enginer-skill / code-simplification / code-style / 说人话 等子 skill。仅作导航，不包含子 skill 的具体能力描述。
 ---
 
 # skills-index
@@ -14,7 +14,8 @@ description: 工作区 skill 根索引，按场景路由到 download_website / r
 | 抓网页、下载网页、镜像站点、离线保存、爬站、mirror、offline、http server 本地 | [download_website](download_website/SKILL.md) | 抓取网页 HTML 与所有静态资源到本地，并起一个 `python -m http.server` 提供离线浏览 |
 | 逆向、IDA、JEB、JADX、smali、dex、重命名符号、伪代码、反编译、patch、驱动 | [reverse-enginer-skill](reverse-enginer-skill/SKILL.md) | 逆向分析习惯：IDA/JEB/JADX MCP 客户端连接、符号重命名、文档编写规范、辅助脚本 |
 | 简化、重构可读性、降低复杂度、清理冗余、改写清晰 | [code-simplification](code-simplification.md) | 在行为不变前提下简化代码：拆嵌套、合并重复、命名具体、删死代码 |
-| 代码风格、编码规范、UTF-8、Python 风格、写作风格、中文写作 | [code-style](code-style.md) | 代码风格（编码、布局、注释、测试）和中文写作风格（七条准则） |
+| 代码风格、编码规范、UTF-8、Python 风格 | [code-style](code-style.md) | 代码风格（编码、布局、注释、测试） |
+| 说人话、汇报、解释、写作、写作风格、中文写作、清晰表达、禁术语 | [说人话](说人话.md) | 与人类工程师协作的沟通与写作规范：不用 Agent 术语、区分事实/推测/未验证、战略先行的分析方法、中文写作七条准则 |
 
 ## 路由规则
 
