@@ -1,43 +1,32 @@
 #!/usr/bin/env python3
-"""
-download_website.py — single-script offline website mirror.
+"""单文件离线网站镜像工具。
 
-Usage:
+用法：
     python download_website.py fetch <URL> <out_dir>
-        # download the page + every reachable referenced asset into out_dir
+        # 把页面及全部可访问的引用资源下载到 out_dir
 
     python download_website.py serve <site_dir> [--port 8000]
-        # spawn `python -m http.server` rooted at site_dir (bind 0.0.0.0)
+        # 以 site_dir 为根目录启动 `python -m http.server`，绑定 0.0.0.0
 
-What it does:
-- Fetches the entry page HTML (browser User-Agent) using only stdlib (no curl/wget).
-- Discovers resources by parsing href=, src=, poster=, srcset=, url(), and <video>/<source>.
-- Categorises them:
-    * site-relative paths (start with /)  -> under out_dir/<path>
-    * cdn URLs that ship fonts/css/js      -> under out_dir/<cdn-host>/<path>
-- Downloads each, retrying with exponential backoff on transient errors.
-- Strips Cloudflare email-protection helpers, the analytics beacon, and any
-  external Google Fonts link insertion from the saved HTML so the page no longer
-  tries to reach the network.
-- Rewrites every site-relative "/foo/bar" reference to "foo/bar" so it resolves
-  from index.html when served as the root document.
-- If KaTeX is referenced (katex.min.css / katex.min.js / auto-render.min.js),
-  pulls them and any external font URLs the CSS references (KaTeX 0.16 inlines
-  fonts as base64, so usually none are needed).  The folder is renamed
-  katex-<version> (the literal "@" in katex@<ver> breaks Python's
-  SimpleHTTPRequestHandler userinfo handling when the URL is percent-encoded).
-- Rewrites the FontAwesome font URLs inside any downloaded stylesheet that
-  points at cdnjs.cloudflare.com so they resolve locally.
-- After fetching, prints a list of local relative URLs in the resulting HTML
-  and verifies each one resolves to a file on disk.
-- The "serve" sub-command simply spawns `python -m http.server` with the
-  right --bind/--directory/port so the user is running the standard library
-  HTTP server, not a custom handler.
+功能：
+- 仅用标准库和浏览器 User-Agent 获取入口 HTML，不依赖 curl/wget。
+- 从 href、src、poster、srcset、url() 以及 <video>/<source> 中发现资源。
+- 站内相对路径写到 out_dir/<path>，字体、CSS、JS 等 CDN 资源写到
+  out_dir/<cdn-host>/<path>。
+- 下载每项资源，暂时性错误使用指数退避重试。
+- 从保存的 HTML 中移除 Cloudflare 邮箱保护、分析信标及 Google Fonts 外链注入，
+  使页面不再尝试联网。
+- 把站内绝对路径 "/foo/bar" 改写为 "foo/bar"，使其能从根页面 index.html 解析。
+- 引用 KaTeX 时下载其资源和 CSS 所引用的外部字体；目录名中的 ``@`` 改为 ``-``，
+  避免 Python SimpleHTTPRequestHandler 把百分号编码后的 URL 当作用户信息。
+- 改写下载样式表中指向 cdnjs.cloudflare.com 的 FontAwesome 字体地址。
+- 下载后列出结果 HTML 的本地相对 URL，并验证对应磁盘文件存在。
+- ``serve`` 子命令只负责以正确参数启动标准库 HTTP 服务，不实现自定义处理器。
 
-Notes:
-- Tested on Windows 10 with Python 3.14. Pure stdlib.
-- Resolves HTML-relative URLs against the entry URL, not the page URL only,
-  so links like "../images/foo.png" in a CSS file at /css/x.css land correctly.
+说明：
+- 已在 Windows 10 与 Python 3.14 上测试，只使用标准库。
+- HTML 相对 URL 以入口 URL 为基准解析，因此 /css/x.css 中的
+  "../images/foo.png" 也能落到正确位置。
 """
 
 from __future__ import annotations
@@ -55,9 +44,8 @@ import urllib.request
 from html.parser import HTMLParser
 from typing import Iterable
 
-
 # ---------------------------------------------------------------------------
-# Network helpers
+# 网络辅助函数
 # ---------------------------------------------------------------------------
 
 DEFAULT_HEADERS = {
@@ -74,15 +62,14 @@ DEFAULT_HEADERS = {
 
 _FONT_EXT_RE = re.compile(r"\.(woff2?|ttf|otf|eot)(\?|$)", re.IGNORECASE)
 
-# CDN hosts we want to mirror locally instead of leaving external.
+# 需要镜像到本地、不能保留外链的 CDN 主机。
 KEEP_CDN_HOSTS = {
     "cdnjs.cloudflare.com",
     "cdn.jsdelivr.net",
 }
 
-
 def http_get(url: str, *, timeout: float = 60.0, headers: dict | None = None) -> bytes:
-    """GET `url`, return body bytes. Raises urllib.error.HTTPError on 4xx/5xx."""
+    """以 GET 请求 ``url`` 并返回正文；4xx/5xx 时抛出 HTTPError。"""
     h = dict(DEFAULT_HEADERS)
     if headers:
         h.update(headers)
@@ -99,11 +86,10 @@ def http_get(url: str, *, timeout: float = 60.0, headers: dict | None = None) ->
             last_err = e
         except (urllib.error.URLError, socket.timeout, ConnectionError) as e:
             last_err = e
-        # backoff: 1s, 2s
+        # 依次退避 1 秒、2 秒。
         import time
         time.sleep(2 ** attempt)
     raise last_err if last_err else RuntimeError("fetch failed")
-
 
 def http_get_optional(url: str, **kw) -> bytes | None:
     try:
@@ -115,20 +101,16 @@ def http_get_optional(url: str, **kw) -> bytes | None:
         print(f"  skip ERR {type(e).__name__}: {url}")
         return None
 
-
 # ---------------------------------------------------------------------------
-# URL classification
+# URL 分类
 # ---------------------------------------------------------------------------
 
 def classify(url: str, page_url: str) -> tuple[str, str] | None:
-    """
-    Decide where to put `url` on disk.
+    """决定 ``url`` 在磁盘中的保存位置。
 
-    Returns (local_relpath, abs_url) or None to skip.
-    - Site-relative ("/foo") and same-host -> "<foo>"  (only for media-like URLs)
-    - cdn host we mirror                   -> "<host>/<path>"
-    - Other absolute http(s)               -> None (skip; we don't mirror the world)
-    - mailto:/javascript:/data:/#         -> None
+    返回 ``(local_relpath, abs_url)``，跳过时返回 ``None``。站内资源保存为
+    ``<foo>``，需镜像的 CDN 保存为 ``<host>/<path>``；其他绝对网络地址及
+    ``mailto:``、``javascript:``、``data:``、锚点链接均跳过。
     """
     if not url or url.isspace():
         return None
@@ -138,33 +120,29 @@ def classify(url: str, page_url: str) -> tuple[str, str] | None:
     if url.startswith("#"):
         return None
     page_parsed = urllib.parse.urlsplit(page_url)
-    # Protocol-relative ("//host/path") -> expand and recurse
+    # 展开协议相对地址（"//host/path"）后重新分类。
     if parsed.scheme == "" and url.startswith("//"):
         abs_url = page_parsed.scheme + ":" + url
         return classify(abs_url, page_url)
     if parsed.scheme in ("http", "https"):
         if parsed.netloc in KEEP_CDN_HOSTS:
-            # Mirror at <out_dir>/<host>/<path> so foreign files don't mix with
-            # site-relative files in the root.
+            # 保存到 <out_dir>/<host>/<path>，避免外站文件与根目录站内文件混杂。
             path = parsed.path.lstrip("/")
             return f"{parsed.netloc}/{path}", url
-        # Same host? Mirror only if it looks like a media asset.
+        # 同一主机只镜像看起来像媒体资源的地址。
         if parsed.netloc == page_parsed.netloc:
             return _same_host_asset(parsed, page_url)
-        # foreign host - skip
+        # 跳过其他主机。
         return None
-    # No scheme: doc-relative or site-relative
+    # 无协议地址属于文档相对或站点相对地址。
     abs_url = urllib.parse.urljoin(page_url, url)
     abs_parsed = urllib.parse.urlsplit(abs_url)
     if abs_parsed.scheme in ("http", "https") and abs_parsed.netloc == page_parsed.netloc:
         return _same_host_asset(abs_parsed, page_url)
     return None
 
-
-# Only fetch same-host URLs that look like media (so we don't recursively
-# mirror unrelated pages).  Hugo permalink routes we want to skip include
-# /blog/, /authors/, /tags/, /categories/, /contact/, /, and any URL ending
-# in "/" without a file extension.
+# 同一主机只获取看起来像媒体的 URL，避免递归镜像无关页面。跳过 Hugo 永久链接
+# 路由和所有以 "/" 结尾且没有扩展名的 URL。
 _ASSET_EXT = (
     ".css", ".js", ".mjs", ".map", ".json", ".xml", ".webmanifest",
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp",
@@ -177,17 +155,16 @@ _SKIP_PERMALINK_HINTS = (
     "/blog/", "/authors/", "/tags/", "/categories/", "/contact/", "/search/",
 )
 
-
 def _same_host_asset(parsed: urllib.parse.SplitResult, page_url: str) -> tuple[str, str] | None:
     path = parsed.path
     base = os.path.basename(path)
-    # "/blog/" -> no extension, ends with /  -> permalink, skip
+    # 类似 "/blog/" 的无扩展名目录是永久链接，应跳过。
     if path.endswith("/"):
         return None
-    # "/blog" with no extension -> permalink, skip
+    # 类似 "/blog" 的无扩展名路径也是永久链接，应跳过。
     if "." not in base:
         return None
-    # Hugo-style permalink hints
+    # 过滤 Hugo 风格永久链接的常见路径。
     for hint in _SKIP_PERMALINK_HINTS:
         if hint in path:
             return None
@@ -198,17 +175,16 @@ def _same_host_asset(parsed: urllib.parse.SplitResult, page_url: str) -> tuple[s
         rel = f"{b}.{qs}{ext}"
     return rel, urllib.parse.urljoin(page_url, path + (("?" + parsed.query) if parsed.query else ""))
 
-
 # ---------------------------------------------------------------------------
-# HTML resource extraction
+# HTML 资源提取
 # ---------------------------------------------------------------------------
 
 class _HTMLScanner(HTMLParser):
-    # <link rel> values that should NOT be treated as asset URLs.
+    # 不应视为资源 URL 的 <link rel> 值。
     NON_ASSET_LINK_REL = frozenset({
         "preconnect", "dns-prefetch", "canonical", "alternate",
     })
-    # <link rel> values that explicitly point at an asset.
+    # 明确指向资源的 <link rel> 值。
     ASSET_LINK_REL = frozenset({
         "stylesheet", "icon", "shortcut icon", "apple-touch-icon",
         "manifest", "preload", "modulepreload",
@@ -222,12 +198,11 @@ class _HTMLScanner(HTMLParser):
         d = dict(attrs)
         rel_tokens = {t.strip().lower() for t in d.get("rel", "").split()}
         if tag == "link":
-            # Skip pure non-asset rels (preconnect, dns-prefetch, canonical).
-            # Mixed rels (e.g. "icon") and explicit asset rels are kept.
+            # 跳过纯非资源 rel；混合 rel 和明确的资源 rel 仍保留。
             if rel_tokens and rel_tokens <= self.NON_ASSET_LINK_REL:
                 return
             if rel_tokens and not (rel_tokens & self.ASSET_LINK_REL):
-                # rel contains tokens we don't recognise (e.g. author) - keep href just in case
+                # rel 含未知标记时保留 href，避免误删资源。
                 pass
         for k in ("href", "src", "poster", "data-src"):
             v = d.get(k)
@@ -245,20 +220,18 @@ class _HTMLScanner(HTMLParser):
                 u = u.strip().strip("'\"").split()[0]
                 self.refs.append(u)
 
-
 def extract_html_refs(html: str) -> list[str]:
     s = _HTMLScanner()
     try:
         s.feed(html)
     except Exception:
         pass
-    # also inline url() in any <style> blocks
+    # 同时提取所有 <style> 块内的 url()。
     for m in re.finditer(r"<style[^>]*>(.*?)</style>", html, re.IGNORECASE | re.DOTALL):
         for u in re.findall(r"url\(([^)]+)\)", m.group(1)):
             u = u.strip().strip("'\"").split()[0]
             s.refs.append(u)
     return s.refs
-
 
 def extract_css_refs(css: str, css_url: str) -> list[str]:
     out = []
@@ -269,9 +242,8 @@ def extract_css_refs(css: str, css_url: str) -> list[str]:
         out.append(urllib.parse.urljoin(css_url, u))
     return out
 
-
 # ---------------------------------------------------------------------------
-# Downloader
+# 下载器
 # ---------------------------------------------------------------------------
 
 class Downloader:
@@ -282,7 +254,7 @@ class Downloader:
         self.css_visited: set[str] = set()
         self.errors: list[tuple[str, str]] = []
 
-    # ----- low-level write --------------------------------------------------
+    # 底层写入。
 
     def _write(self, rel: str, data: bytes) -> str:
         local = os.path.join(self.out_dir, rel.replace("/", os.sep))
@@ -291,20 +263,18 @@ class Downloader:
             f.write(data)
         return local
 
-    # ----- one resource -----------------------------------------------------
+    # 单项资源。
 
     @staticmethod
     def _normalize_rel(rel: str) -> str:
-        # The katex assets on cdn.jsdelivr.net have a "/dist/" path segment
-        # in the URL but our rewritten HTML drops it so the served URL is
-        # shorter.  Strip "/dist/" from the katex folder so disk and HTML
-        # line up.
+        # cdn.jsdelivr.net 上的 KaTeX URL 带有 "/dist/"，改写后的 HTML 会去掉它；
+        # 磁盘路径也去掉该段，保证二者一致。
         rel = rel.replace("@", "-")
         rel = re.sub(r"(cdn\.jsdelivr\.net/npm/katex-[0-9.]+)/dist/", r"\1/", rel)
         return rel
 
     def fetch_one(self, url: str) -> str | None:
-        """Download `url`, return its local relpath or None if it was skipped."""
+        """下载 ``url``，返回本地相对路径；跳过时返回 ``None``。"""
         cls = classify(url, self.page_url)
         if not cls:
             return None
@@ -320,7 +290,7 @@ class Downloader:
         local = self._write(rel, data)
         self.fetched.add(rel)
         print(f"  ok   {len(data):>10} {rel}")
-        # Recurse into CSS for url()
+        # 递归处理 CSS 中的 url()。
         if rel.endswith(".css"):
             self._walk_css(local, abs_url)
         return rel
@@ -340,12 +310,12 @@ class Downloader:
             except Exception as e:
                 self.errors.append((ref, str(e)))
 
-    # ----- entry ------------------------------------------------------------
+    # 下载入口。
 
     def run(self, entry_html: str):
-        # Discover references in the entry HTML
+        # 发现入口 HTML 引用的资源。
         refs = extract_html_refs(entry_html)
-        # De-dup, preserve order
+        # 去重并保留原顺序。
         seen = set()
         ordered = []
         for r in refs:
@@ -358,19 +328,18 @@ class Downloader:
             except Exception as e:
                 self.errors.append((r, str(e)))
 
-
 # ---------------------------------------------------------------------------
-# HTML rewriting
+# HTML 改写
 # ---------------------------------------------------------------------------
 
 def rewrite_html(html: str) -> str:
-    # Remove Cloudflare email-protection scripts and links
+    # 移除 Cloudflare 邮箱保护脚本和链接。
     html = re.sub(
         r'<script[^>]*data-cfasync[^>]*src\s*=\s*"/cdn-cgi/scripts/[^"]*email-decode\.min\.js"[^>]*></script>',
         "",
         html,
     )
-    # Match the opening tag, then anything (non-greedy) up to the closing </a>.
+    # 从起始标签非贪婪匹配到对应的 </a>。
     html = re.sub(
         r'<a\b[^>]*?href\s*=\s*"/cdn-cgi/l/email-protection[^"]*"[^>]*>.*?</a>',
         '<a href="#" data-email="protected">[protected email]</a>',
@@ -388,23 +357,22 @@ def rewrite_html(html: str) -> str:
         html,
     )
 
-    # Drop Cloudflare analytics beacon
+    # 移除 Cloudflare 分析信标。
     html = re.sub(
         r'<script[^>]*static\.cloudflareinsights\.com[^>]*></script>',
         "<!-- analytics removed for offline -->",
         html,
     )
 
-    # Drop inline Google Fonts insertion
+    # 移除内联 Google Fonts 注入。
     html = re.sub(
         r'<script>\(function\(\)\{const e=document\.createElement\("link"\);e\.href="https://fonts\.googleapis\.com/css2\?[^"]+",[^<]+</script>',
         "<!-- Google Fonts removed for offline -->",
         html,
     )
 
-    # Rewrite KaTeX CDN URLs to a local path that won't have '@'.
-    # The downloader mirrors files at <host>/<path>, so we point the rewritten
-    # HTML at the same relative path.
+    # 把 KaTeX CDN URL 改为不含 ``@`` 的本地路径，并与下载器的
+    # <host>/<path> 保存结构保持一致。
     html = re.sub(
         r'https://cdn\.jsdelivr\.net/npm/katex@([0-9.]+)/dist/',
         r'cdn.jsdelivr.net/npm/katex-\1/',
@@ -416,7 +384,7 @@ def rewrite_html(html: str) -> str:
         html,
     )
 
-    # Rewrite every site-relative "/foo" reference to "foo"
+    # 把所有站点相对 "/foo" 引用改写为 "foo"。
     html = re.sub(
         r'(\b(?:href|src|poster|data-src)\s*=\s*["\'])/([^"\']*)["\']',
         lambda m: f'{m.group(1)}{m.group(2)}{m.group(0)[-1]}',
@@ -425,17 +393,15 @@ def rewrite_html(html: str) -> str:
 
     return html
 
-
 def rewrite_css_paths(css: str) -> str:
-    """Rewrite any cdnjs.font-awesome URL inside a CSS file to ../<relpath>."""
+    """把 CSS 中的 cdnjs.font-awesome URL 改写为 ../<relpath>。"""
     return css.replace(
         "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/",
         "../cdnjs.cloudflare.com/ajax/libs/font-awesome/",
     )
 
-
 # ---------------------------------------------------------------------------
-# Sub-commands
+# 子命令
 # ---------------------------------------------------------------------------
 
 def cmd_fetch(args):
@@ -450,14 +416,13 @@ def cmd_fetch(args):
     print("Discovering and downloading referenced resources...")
     dl.run(html)
 
-    # Save rewritten index.html
+    # 保存改写后的 index.html。
     rewritten = rewrite_html(html)
     with open(os.path.join(out_dir, "index.html"), "wb") as f:
         f.write(rewritten.encode("utf-8"))
     print(f"\nWrote {os.path.join(out_dir, 'index.html')} ({len(rewritten)} chars)")
 
-    # Now that index.html exists, also rewrite font-awesome URLs inside any CSS that
-    # we downloaded with full https URLs.
+    # index.html 写入后，再改写已下载 CSS 中完整的 FontAwesome HTTPS URL。
     for dirpath, _, files in os.walk(out_dir):
         for fn in files:
             if fn.endswith(".css"):
@@ -469,9 +434,9 @@ def cmd_fetch(args):
                     with open(p, "wb") as f:
                         f.write(c2.encode("utf-8"))
 
-    # Verify
+    # 验证结果。
     print("\nVerifying local relative URLs in index.html resolve to disk files...")
-    # Handle both quoted ("foo") and unquoted (foo) attribute values.
+    # 同时处理有引号（"foo"）和无引号（foo）的属性值。
     attr_re = re.compile(
         r'(?:href|src|poster)\s*=\s*(?:"([^"]+)"|\'([^\']+)\'|([^\s>"\'`]+))',
         re.IGNORECASE,
@@ -502,20 +467,18 @@ def cmd_fetch(args):
 
     print("\nDone. To serve:  python download_website.py serve", out_dir)
 
-
 class _SilentHandler:
-    """Placeholder retained for backwards compatibility.  The `serve`
-    sub-command now spawns `python -m http.server` instead of running
-    a custom handler in-process."""
+    """为向后兼容保留的占位类。
 
+    ``serve`` 子命令现在启动 ``python -m http.server``，不再于进程内运行自定义
+    处理器。
+    """
 
 def cmd_serve(args):
-    """Spawn `python -m http.server` rooted at site_dir.
+    """以 site_dir 为根目录启动 ``python -m http.server``。
 
-    We don't reinvent the HTTP server here — http.server is part of the
-    standard library and is what the user asked for.  This wrapper just
-    spawns it with the right --directory / --bind / port, waits for it to
-    exit, and propagates the exit code.
+    这里直接使用标准库 HTTP 服务。包装器只负责传入正确的目录、绑定地址和端口，
+    等待服务退出，并透传退出码。
     """
     site_dir = os.path.abspath(args.site_dir)
     port = args.port
@@ -534,14 +497,12 @@ def cmd_serve(args):
         rc = subprocess.call(cmd)
         return rc
     except KeyboardInterrupt:
-        # http.server handles SIGINT itself and exits with 0; we just need to
-        # catch the KeyboardInterrupt so the parent shell doesn't see a
-        # traceback.
+        # http.server 会自行处理 SIGINT 并以 0 退出；这里只捕获 KeyboardInterrupt，
+        # 避免父 shell 显示调用栈。
         return 0
 
-
 # ---------------------------------------------------------------------------
-# CLI
+# 命令行入口
 # ---------------------------------------------------------------------------
 
 def main(argv: list[str] | None = None) -> int:
@@ -561,7 +522,6 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     args.func(args)
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

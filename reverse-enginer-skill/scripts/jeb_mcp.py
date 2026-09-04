@@ -6,15 +6,13 @@ from typing import Any
 
 import requests
 
-
 DEFAULT_MCP_URL = "http://localhost:8425/mcp"
 DEFAULT_PROTOCOL_VERSION = "2025-03-26"
 
-
 class JebMcpClient:
-    """MCP client over the Streamable HTTP transport (2025-03-26)."""
+    """基于 Streamable HTTP 传输协议（2025-03-26）的 MCP 客户端。"""
 
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str):
         self.base_url = base_url
         self.session = requests.Session()
         self.session_id: str | None = None
@@ -79,7 +77,7 @@ class JebMcpClient:
             return message.get("result", {})
         raise RuntimeError(f"No response received for request id {request_id}")
 
-    def close(self) -> None:
+    def close(self):
         if self.session_id:
             try:
                 self.session.delete(self.base_url, headers=self._headers(), timeout=10)
@@ -91,7 +89,7 @@ class JebMcpClient:
     def __enter__(self) -> "JebMcpClient":
         return self
 
-    def __exit__(self, *_exc: Any) -> None:
+    def __exit__(self, *_exc: Any):
         self.close()
 
     def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -104,7 +102,6 @@ class JebMcpClient:
     def list_tools(self) -> list[dict[str, Any]]:
         result = self._send("tools/list", {}, expect_response=True)
         return result.get("tools", [])
-
 
 def _parse_scalar(raw: str) -> Any:
     raw = _strip_outer_quotes(raw)
@@ -120,12 +117,10 @@ def _parse_scalar(raw: str) -> Any:
     except json.JSONDecodeError:
         return raw
 
-
 def _strip_outer_quotes(raw: str) -> str:
     if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("'", '"'):
         return raw[1:-1]
     return raw
-
 
 def _parse_key_value_items(
     items: list[str] | None,
@@ -144,7 +139,6 @@ def _parse_key_value_items(
         payload[key] = parser(raw_value.strip())
     return payload
 
-
 def _parse_json_value(raw: str) -> Any:
     raw = _strip_outer_quotes(raw)
     try:
@@ -154,7 +148,6 @@ def _parse_json_value(raw: str) -> Any:
             return json.loads(_to_relaxed_json(raw))
         except json.JSONDecodeError:
             raise ValueError(f"Invalid JSON value: {raw!r}") from exc
-
 
 def _to_relaxed_json(raw: str) -> str:
     text = raw.strip()
@@ -176,22 +169,17 @@ def _to_relaxed_json(raw: str) -> str:
 
     return re.sub(r'(:\s*)([^,\]\}]+)', repl, text)
 
-
 def _parse_string_value(raw: str) -> str:
     return _strip_outer_quotes(raw)
-
 
 def parse_key_value_args(items: list[str] | None) -> dict[str, Any]:
     return _parse_key_value_items(items, parser=_parse_scalar, option_name="--arg")
 
-
 def parse_json_args(items: list[str] | None) -> dict[str, Any]:
     return _parse_key_value_items(items, parser=_parse_json_value, option_name="--arg-json")
 
-
 def parse_string_args(items: list[str] | None) -> dict[str, Any]:
     return _parse_key_value_items(items, parser=_parse_string_value, option_name="--arg-str")
-
 
 def parse_args_json(
     raw: str | None,
@@ -215,10 +203,8 @@ def parse_args_json(
     payload.update(value)
     return payload
 
-
-def print_json(data: Any) -> None:
+def print_json(data: Any):
     print(json.dumps(data, ensure_ascii=False, indent=2))
-
 
 def cmd_tools(client: JebMcpClient, _args: argparse.Namespace) -> int:
     for tool in client.list_tools():
@@ -226,7 +212,6 @@ def cmd_tools(client: JebMcpClient, _args: argparse.Namespace) -> int:
         title = title if isinstance(title, str) else (title[0] if title else "")
         print(f"{tool['name']} — {title}" if title else tool["name"])
     return 0
-
 
 def cmd_tool_schema(client: JebMcpClient, args: argparse.Namespace) -> int:
     tools = {tool["name"]: tool for tool in client.list_tools()}
@@ -236,7 +221,6 @@ def cmd_tool_schema(client: JebMcpClient, args: argparse.Namespace) -> int:
         return 1
     print_json(tool)
     return 0
-
 
 def cmd_call(client: JebMcpClient, args: argparse.Namespace) -> int:
     result = client.call_tool(
@@ -249,7 +233,6 @@ def cmd_call(client: JebMcpClient, args: argparse.Namespace) -> int:
         payload = result
     print_json(payload)
     return 1 if result.get("isError") else 0
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -298,20 +281,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     return parser
 
-
 COMMANDS = {
     "tools": cmd_tools,
     "tool-schema": cmd_tool_schema,
     "call": cmd_call,
 }
 
-
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     with JebMcpClient(args.url) as client:
         return COMMANDS[args.command](client, args)
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

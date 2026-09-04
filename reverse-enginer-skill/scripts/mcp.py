@@ -13,23 +13,17 @@ import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
-
 DEFAULT_MCP_URL = "http://127.0.0.1:8745/mcp"
 DEFAULT_TIMEOUT = 600.0
 
-
 def model_to_dict(value: Any) -> dict[str, Any]:
-    if hasattr(value, "model_dump"):
-        return value.model_dump(mode="json", by_alias=True, exclude_none=True)
-    raise TypeError(f"无法序列化 {type(value).__name__}")
-
+    return value.model_dump(mode="json", by_alias=True, exclude_none=True)
 
 def split_key_value(raw: str) -> tuple[str, str]:
     key, separator, value = raw.partition("=")
     if not separator or not key:
         raise argparse.ArgumentTypeError("参数必须使用 KEY=VALUE 格式")
     return key, value
-
 
 def load_json_object(raw: str) -> dict[str, Any]:
     if raw.startswith("@"):
@@ -39,7 +33,6 @@ def load_json_object(raw: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("tool arguments 必须是 JSON object")
     return value
-
 
 def parse_tool_arguments(args: argparse.Namespace) -> dict[str, Any]:
     result = load_json_object(args.args) if args.args else {}
@@ -61,10 +54,8 @@ def parse_tool_arguments(args: argparse.Namespace) -> dict[str, Any]:
 
     return result
 
-
-def print_json(value: Any) -> None:
+def print_json(value: Any):
     print(json.dumps(value, ensure_ascii=False, indent=2))
-
 
 async def execute(args: argparse.Namespace) -> int:
     timeout = httpx.Timeout(args.timeout)
@@ -111,7 +102,6 @@ async def execute(args: argparse.Namespace) -> int:
                     return 1 if result.isError else 0
 
                 raise ValueError(f"未知命令：{args.command}")
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -162,12 +152,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     return parser
 
-
 def unwrap_error(error: BaseException) -> BaseException:
     while isinstance(error, BaseExceptionGroup) and len(error.exceptions) == 1:
         error = error.exceptions[0]
     return error
-
 
 def main() -> int:
     args = build_parser().parse_args()
@@ -176,7 +164,6 @@ def main() -> int:
     except Exception as error:
         print(f"error: {unwrap_error(error)}", file=sys.stderr)
         return 1
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
