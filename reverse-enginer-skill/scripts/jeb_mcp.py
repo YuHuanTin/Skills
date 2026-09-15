@@ -38,9 +38,7 @@ class JebMcpClient:
             headers["Mcp-Session-Id"] = self.session_id
         return headers
 
-    def _send(
-        self, method: str, params: dict[str, Any], *, expect_response: bool
-    ) -> dict[str, Any]:
+    def _send(self, method: str, params: dict[str, Any], *, expect_response: bool) -> dict[str, Any]:
         payload: dict[str, Any] = {"jsonrpc": "2.0", "method": method, "params": params}
         if expect_response:
             self._request_id += 1
@@ -122,12 +120,7 @@ def _strip_outer_quotes(raw: str) -> str:
         return raw[1:-1]
     return raw
 
-def _parse_key_value_items(
-    items: list[str] | None,
-    *,
-    parser: Any,
-    option_name: str,
-) -> dict[str, Any]:
+def _parse_key_value_items(items: list[str] | None, *, parser: Any, option_name: str) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     for item in items or []:
         if "=" not in item:
