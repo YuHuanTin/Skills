@@ -68,7 +68,7 @@ description: 逆向习惯
 ### 连接选择
 
 1. 检查当前会话是否存在原生 IDA MCP tools，并调用 `idb_list` 确认连接可用，可用时直接使用，不额外启动服务
-2. 原生 IDA MCP 不存在或无法连接时，后台启动 `idalib-mcp --host 127.0.0.1 --port 8745 --max-workers 4`，等待就绪后继续，任务结束时不关闭
+2. 原生 IDA MCP 不存在或无法连接时，后台启动 `idalib-mcp --host 127.0.0.1 --port 8745 --unsafe`，等待就绪后继续，任务结束时不关闭；`--unsafe` 必须在启动 `idalib-mcp` 时传入
 3. 使用 venv Python 运行 [scripts/using_mcp.py](scripts/using_mcp.py) 调用 HTTP tool
 
 放宽 ida 操作的超时时间
