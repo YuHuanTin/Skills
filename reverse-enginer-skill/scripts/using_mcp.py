@@ -5,7 +5,6 @@ import argparse
 import asyncio
 import json
 import sys
-from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -64,11 +63,12 @@ async def execute(args: argparse.Namespace) -> int:
             args.url,
             http_client=http_client,
             terminate_on_close=False,
-        ) as (read_stream, write_stream, _get_session_id):
+        ) as streams:
+            read_stream, write_stream = streams[:2]
             async with ClientSession(
                 read_stream,
                 write_stream,
-                read_timeout_seconds=timedelta(seconds=args.timeout),
+                read_timeout_seconds=args.timeout,
             ) as session:
                 await session.initialize()
 
@@ -99,7 +99,7 @@ async def execute(args: argparse.Namespace) -> int:
                     if args.structured:
                         payload = payload.get("structuredContent", payload)
                     print_json(payload)
-                    return 1 if result.isError else 0
+                    return 1 if result.is_error else 0
 
                 raise ValueError(f"未知命令：{args.command}")
 
