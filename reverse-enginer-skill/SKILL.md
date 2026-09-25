@@ -77,6 +77,8 @@ description: 逆向习惯
 
 ida 批量重命名函数后创建一个函数分组，将原来的函数移动到分组内，注意是剪贴而不是复制一份
 
+用户如需获取 ida 函数 CFG 则使用 `idaapi.gen_flow_graph_ea`，传入 `idaapi.CHART_GEN_DOT`，输出紧凑 `.dot` 文件
+
 ## jeb pro
 
 可以使用 jeb_mcp.py 来连接到 jeb mcp
